@@ -1,0 +1,600 @@
+package mea.imas2.exportDataToExcel;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.math.BigDecimal;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Random;
+import java.util.stream.Collectors;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpSession;
+import javax.validation.ValidationException;
+import javax.xml.bind.JAXBContext;
+import javax.xml.bind.Marshaller;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.OutputKeys;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerConfigurationException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.log4j.Logger;
+import org.hibernate.HibernateException;
+import org.hibernate.Session;
+import org.hibernate.SessionFactory;
+import org.hibernate.Transaction;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpRequest;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.ModelMap;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.servlet.ModelAndView;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+
+import mea.imas2.Bank.BankBeanDPfms;
+import mea.imas2.bean.AdvancesBean;
+import mea.imas2.bean.ConversionBean;
+import mea.imas2.bean.HdrectBean;
+import mea.imas2.bean.MedicalReportBean;
+import mea.imas2.bean.MissionConsolidatedBean;
+import mea.imas2.bean.MissionConsolidatedCpk;
+import mea.imas2.bean.MissionProfileBean;
+import mea.imas2.bean.RBIDraftBean;
+import mea.imas2.bean.SupSalaryPfmsBean;
+import mea.imas2.bean.TransPfmsBean;
+import mea.imas2.bean.XMLGenBean;
+import mea.imas2.commonFunction.CommonFunction;
+import mea.imas2.commonFunction.ValidationConstraint;
+import mea.imas2.report.ProgressiveExpBeanExcl;
+import mea.imas2.report.siteCustomization.SalaryBeanPfms;
+import mea.imas2.report.voucher.MonthlyCashBookDetailsBean;
+import mea.imas2.report.voucher.VoucherReportService;
+import mea.imas2.service.MissionConsolidatedService;
+import mea.imas2.service.SynchDataWithPfmsService;
+import mea.imas2.voucher.VoucherBean;
+import mea.imas2.voucher.casb.CasbPfmsBean;
+import mea.imas2.voucher.nilBillVoucher.CpfContBean;
+import mea.imas2.xls.ExportOtherTableToExcel;
+
+import mea.imas2.xls.ExportTableToExcel;
+import mea.imas2.xls.OtherPayBillReportMasterExcelBuilderForPayment;
+
+@Controller
+public class ExportDataToExcelController {
+	// AMRIT
+	private static final Logger logger = Logger.getLogger(ExportDataToExcelController.class);
+
+	@Autowired
+	ExportDataToExcelService exportDataToExcelServiceImpl;
+
+	HttpSession session;
+
+	@Autowired
+	MissionConsolidatedService missionConsolidatedServiceImpl;
+
+	@Autowired
+	ExportTableToExcel otherbillpay;
+
+	@Autowired
+	ExportOtherTableToExcel OtherTable;
+
+	// @Autowired
+	// ExportOtherTableToExcelSubSalary OtherTableSub;
+
+	@Autowired
+	OtherPayBillReportMasterExcelBuilderForPayment otherbillpay1;
+
+	@Autowired
+	VoucherReportService voucherReportService;
+
+	@RequestMapping(value = "/exportData", method = { RequestMethod.GET, RequestMethod.POST })
+	public String viewOfPfmsForm(HttpServletRequest request, HttpSession session, ModelMap model) {
+
+		String msnCode = (String) session.getAttribute("msncode");
+		// String startDate=
+		// ExportDataToExcelServiceImpl.getmntcashbookStartDate(msnCode);
+		// String enddate= ExportDataToExcelServiceImpl.getmntcashbookEndDate(msnCode);
+		// model.addAttribute("startDate", "5/05/2023");
+		// model.addAttribute("endDate", "5/05/2023");
+		System.err.println("XXXXXXXXXXX");
+		List<String> tblList = new ArrayList<>();
+		tblList.add("SALARY");
+		tblList.add("SUBSALARY");
+		tblList.add("RBIDRAFT");
+		tblList.add("CONVERSION");
+		tblList.add("CPFCONT");
+		tblList.add("HDRECT");
+		model.addAttribute("tableList", tblList);
+		return "exportDataToExcel";
+	}
+
+	@RequestMapping(value = "/Inner/exportVoucherData", method = { RequestMethod.POST })
+	public @ResponseBody ModelAndView exportVoucherData(HttpSession session, HttpServletRequest request, ModelMap model,
+			ModelAndView modelAndView, @RequestParam(value = "pfmsFromMonth") String pfmsFromMonth) throws IOException {
+
+		String msncode = (String) session.getAttribute("msncode");
+		Date currentDate = (Date) session.getAttribute("createdDate");
+		String userName = (String) session.getAttribute("username");
+		String ipadd = (String) session.getAttribute("createdIp");
+		System.out.println("hhhhh");
+		logger.info("pfmsFromMonth :: " + pfmsFromMonth);
+
+		String pfmsFromDate = "01/".concat(pfmsFromMonth);
+		String pfmsToDate = CommonFunction.getLastDate(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7));
+		String finYear = new CommonFunction().generateFinancialYear(
+				CommonFunction.getLastDateByMnthYr(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7)));
+
+		// SessionFactory pfmsSessionFactory=
+		// synchDataWithPfmsServiceImpl.getPFMSSessionFactory();
+		// Session pfmsSession=pfmsSessionFactory.openSession();
+		// Transaction trans = pfmsSession.beginTransaction();
+		int status = 0;
+
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_MSNCODE, msncode)) {
+			throw new ValidationException("INVALID MSNCODE");
+		}
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_DATE, pfmsFromDate)) {
+			throw new ValidationException("INVALID DATE RANGE");
+		}
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_DATE, pfmsToDate)) {
+			throw new ValidationException("INVALID DATE RANGE");
+		}
+		if (CommonFunction.validateField(ValidationConstraint.REGEX_FIN_YEAR, finYear)) {
+			throw new ValidationException("INVALID FINANCIAL YEAR");
+		}
+
+		List<VoucherBean> voucherList1 = new ArrayList<>();
+		List<List<BankBeanDPfms>> bankDList = new ArrayList<>();
+		List<List<TransPfmsBean>> transList = new ArrayList<>();
+		List<List<CasbPfmsBean>> casbList = new ArrayList<>();
+		List<List<AdvancesBean>> advancesList = new ArrayList<>();
+		List<String> empList = new ArrayList<>();
+		// List <String> rbiDraftList=new ArrayList<>();
+		// List<List<RBIDraftBean>> rbiDraftList= new ArrayList<>();
+		List<Object[]> grantCodeList = new ArrayList<>();
+
+		List<ProgressiveExpBeanExcl> otherbillList = new ArrayList<ProgressiveExpBeanExcl>();
+		ProgressiveExpBeanExcl gridObj = null;
+
+		List<ProgressiveExpBeanExcl> otherbillList1 = new ArrayList<ProgressiveExpBeanExcl>();
+		ProgressiveExpBeanExcl gridObj1 = null;
+
+		try {
+
+			session = request.getSession(true);
+			Date dt = (Date) session.getAttribute("createdDate");
+			// String msncode = (String) request.getSession().getAttribute("msncode");
+			@SuppressWarnings("unused")
+			VoucherBean mb = new VoucherBean();
+
+			@SuppressWarnings("unused")
+			BankBeanDPfms bbd = new BankBeanDPfms();
+
+			/*
+			 * @SuppressWarnings("unused") SalaryBeanPfms sbp=new SalaryBeanPfms();
+			 */
+
+			@SuppressWarnings("unused")
+			TransPfmsBean tp = new TransPfmsBean();
+
+			////////////////////////////////////////////////// Get data into
+			////////////////////////////////////////////////// Table///////////////////////////////////////////////////////////////////////////////
+			// int srNO = 0;
+			// 1. Get data into Voucher Table
+			voucherList1 = exportDataToExcelServiceImpl.getListDataOfVoucherTab(msncode, pfmsFromDate, pfmsToDate);
+			System.err.println("voucherlist");
+			System.err.println(voucherList1);
+
+			// 2. Get data from Bank Table..............
+			if (CollectionUtils.isNotEmpty(voucherList1)) {
+				bankDList = exportDataToExcelServiceImpl.getListDataOfBankTab(voucherList1, msncode);
+				System.err.println("banklist");
+			}
+
+			// 3.0 Get data from Trans Table.................
+			if (CollectionUtils.isNotEmpty(voucherList1)) {
+				transList = exportDataToExcelServiceImpl.getListDataOfTransTab(voucherList1, msncode);
+				System.err.println("translist");
+			}
+
+			// 4.0 Get data from Casb Table..................
+			if (CollectionUtils.isNotEmpty(voucherList1)) {
+				casbList = exportDataToExcelServiceImpl.getListDataOfCasbTab(voucherList1, msncode);
+				System.err.println("casbList");
+			}
+
+		} catch (Exception e) {
+			logger.error("######SOMETHING WENT WRONG IN SynchDataWithPfmsController CLASS#######");
+			status = 1;
+
+		}
+		// modelAndView.addObject("otherbillList", otherbillList);
+		modelAndView.addObject("voucherList1", voucherList1);
+		modelAndView.addObject("casbList", casbList);
+		modelAndView.addObject("transList", transList);
+		modelAndView.addObject("bankDList", bankDList);
+
+		modelAndView.setView(otherbillpay);
+
+		return modelAndView;
+
+	}
+///////////////////////////////////////////////////////////MultipleTable///////////////////////////////////////////////////////////////////////////////////////////////////
+
+	@RequestMapping(value = "/Inner/exportMultipleTable", method = { RequestMethod.POST })
+	public @ResponseBody ModelAndView exportMultipleTable(HttpSession session, HttpServletRequest request,
+			ModelMap model, ModelAndView modelAndView, @RequestParam(value = "multipleTableNew") String pfmsFromMonth,
+			@RequestParam(value = "multipleTable") List<String> multipleTableName) throws IOException {
+
+		String msncode = (String) session.getAttribute("msncode");
+		Date currentDate = (Date) session.getAttribute("createdDate");
+		String userName = (String) session.getAttribute("username");
+		String ipadd = (String) session.getAttribute("createdIp");
+
+		System.out.println("hhhhh");
+
+		logger.info("pfmsFromMonth :: " + pfmsFromMonth);
+
+		String pfmsFromDate = "01/".concat(pfmsFromMonth);
+		String pfmsToDate = CommonFunction.getLastDate(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7));
+		String finYear = new CommonFunction().generateFinancialYear(
+				CommonFunction.getLastDateByMnthYr(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7)));
+
+		int status = 0;
+
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_MSNCODE, msncode)) {
+			throw new ValidationException("INVALID MSNCODE");
+		}
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_DATE, pfmsFromDate)) {
+			throw new ValidationException("INVALID DATE RANGE");
+		}
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_DATE, pfmsToDate)) {
+			throw new ValidationException("INVALID DATE RANGE");
+		}
+		if (CommonFunction.validateField(ValidationConstraint.REGEX_FIN_YEAR, finYear)) {
+			throw new ValidationException("INVALID FINANCIAL YEAR");
+		}
+
+		List<VoucherBean> voucherList = exportDataToExcelServiceImpl.getListDataOfVoucherTab(msncode, pfmsFromDate,
+				pfmsToDate);
+		List<List<SalaryBeanPfms>> salaryList = new ArrayList<>();
+		List<List<SupSalaryPfmsBean>> supSalaryList = new ArrayList<>();
+		List<List<RBIDraftBean>> rbiDraftList = new ArrayList<>();
+		List<List<ConversionBean>> conversionList = new ArrayList<>();
+		List<List<CpfContBean>> cpfContList = new ArrayList<>();
+		List<List<HdrectBean>> hdrectList = new ArrayList<>();
+
+		for (String tableName : multipleTableName) {
+			if (tableName.equalsIgnoreCase("SALARY")) {
+				// GET TABLE FROM DB
+				if (voucherList != null && voucherList.size() > 0) {
+					salaryList = exportDataToExcelServiceImpl.getListDataOfSalaryTab(voucherList, msncode);
+					modelAndView.addObject("salaryList", salaryList);
+				}
+			}
+			//////////////////////////////////////////////////////// SUBSALARY//////////////////////////////////////////////////////////////////////////////
+
+			if (tableName.equalsIgnoreCase("SUBSALARY")) {
+				// 6.0 Get data from IMAS and Set Data into PFMS of SupSalary
+				// Table..............
+				if (CollectionUtils.isNotEmpty(voucherList)) {
+					supSalaryList = exportDataToExcelServiceImpl.getListDataOfSupSalaryTab(voucherList, msncode);
+					modelAndView.addObject("supSalaryList", supSalaryList);
+
+				}
+			}
+			//////////////////////////////////////////////// RBIDRAFT////////////////////////////////////////////////////////////////
+
+			if (tableName.equalsIgnoreCase("RBIDRAFT")) {
+				if (CollectionUtils.isNotEmpty(voucherList)) {
+					rbiDraftList = exportDataToExcelServiceImpl.getListDataOfRBIDraftTab(voucherList, msncode);
+					modelAndView.addObject("rbiDraftList", rbiDraftList);
+
+				}
+			}
+
+			////////////////////////////////////////////////////////////// CONVERSION/////////////////////////////////////////////////////
+			////////////////////////////////////////////////////////////// ///////////////////////////////////////////////////////////
+
+			if (tableName.equalsIgnoreCase("CONVERSION")) {
+				if (CollectionUtils.isNotEmpty(voucherList)) {
+					conversionList = exportDataToExcelServiceImpl.getListDataOfConversionTab(voucherList, msncode);
+					System.err.println(conversionList);
+					modelAndView.addObject("conversionList", conversionList);
+
+				}
+			}
+/////////////////////////////////////////////////////HDRECT///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+			if (tableName.equalsIgnoreCase("HDRECT")) {
+				if (CollectionUtils.isNotEmpty(voucherList)) {
+					hdrectList = exportDataToExcelServiceImpl.getListDataOfHdrectTab(voucherList, msncode);
+					modelAndView.addObject("hdrectList", hdrectList);
+
+				}
+			}
+/////////////////////////////////////////////////////////CPFCONT//////////////////////////////////////////////////////////////////////////////////////////	
+
+			if (tableName.equalsIgnoreCase("CPFCONT")) {
+				if (CollectionUtils.isNotEmpty(voucherList)) {
+					cpfContList = exportDataToExcelServiceImpl.getListDataOfCpfContTab(voucherList, msncode);
+					modelAndView.addObject("cpfContList", cpfContList);
+
+				}
+
+			}
+		}
+		System.out.println(pfmsFromMonth);
+
+		System.err.println("hiiiii::::  ");
+
+		modelAndView.setView(OtherTable);
+		return modelAndView;
+
+	}
+
+//////////////////Export to .TXT file///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+	@RequestMapping(value = "Inner/downloadTextFile", method = { RequestMethod.POST })
+	public void downloadXMLParsingData(HttpServletResponse response, HttpServletRequest request,
+			@RequestParam(value = "pfmsFromMonth") String pfmsFromMonth) throws IOException {
+
+	
+		
+		session = request.getSession(true);
+		String msncode = (String) session.getAttribute("msncode");
+		Date currentDate = (Date) session.getAttribute("createdDate");
+		String userName = (String) session.getAttribute("username");
+		String ipadd = (String) session.getAttribute("createdIp");
+
+		logger.info("pfmsFromMonth :: " + pfmsFromMonth);
+
+		String pfmsFromDate = "01/".concat(pfmsFromMonth);
+		String pfmsToDate = CommonFunction.getLastDate(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7));
+		String finYear = new CommonFunction().generateFinancialYear(
+				CommonFunction.getLastDateByMnthYr(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7)));
+
+		logger.info(":::::::: VALIDATION STARTED :::::::::::");
+
+		int status = 0;
+
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_MSNCODE, msncode)) {
+			throw new ValidationException("INVALID MSNCODE");
+		}
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_DATE, pfmsFromDate)) {
+			throw new ValidationException("INVALID DATE RANGE");
+		}
+		if (!CommonFunction.validateField(ValidationConstraint.REGEX_DATE, pfmsToDate)) {
+			throw new ValidationException("INVALID DATE RANGE");
+		}
+		if (CommonFunction.validateField(ValidationConstraint.REGEX_FIN_YEAR, finYear)) {
+			throw new ValidationException("INVALID FINANCIAL YEAR");
+		}
+
+		logger.info(":::::::: VALIDATED SUCCESSFULLY :::::::::::");
+
+		List<VoucherBean> voucherList1 = new ArrayList<>();
+		String path = request.getServletContext().getRealPath("/WEB-INF/downloadcca/");
+
+		try {
+			String gpfHead = null;
+			String fileContent = "\r\n";
+
+			voucherList1 = exportDataToExcelServiceImpl.getListDataOfVoucherTab(msncode, pfmsFromDate, pfmsToDate);
+
+			String fname = null;
+			Random random = new Random();
+			int random4Digit = CommonFunction.gen4DigitRandumNo();
+			String LastDate = CommonFunction.getlastDateOfMnth(Integer.parseInt(pfmsFromMonth.split("/")[1]),
+					Integer.parseInt(pfmsFromMonth.substring(0, 2)));
+			String[] split = LastDate.split("-");
+			String lastDay = split[2];
+
+			fname = "VOUCHER_" + msncode + "" + pfmsFromMonth.split("/")[1] + "" + pfmsFromMonth.substring(0, 2) + ""
+					+ lastDay + "" + random4Digit + ".txt";
+
+			FileWriter fileWriter = new FileWriter(path + fname);
+
+			if (CollectionUtils.isNotEmpty(voucherList1)) {
+
+				// ************************************* Amrit
+				// ******************************************************************
+				for (VoucherBean voucherBean : voucherList1) {
+					if (Integer.parseInt(voucherBean.getMsncode()) > 0) {
+
+						fileContent = fileContent + '"' + voucherBean.getMsncode() + '"' + "," + '"'
+								+ voucherBean.getVoucherNo() + '"' + "," + '"' + voucherBean.getVoucherDt() + '"'
+								+ " , " + '"' + voucherBean.getNature() + '"' + " , " + '"' + voucherBean.getLogin()
+								+ '"' + " , " + '"' + voucherBean.getUpd() + '"' + " , " + '"'
+								+ voucherBean.getSanction() + '"' + " , " + '"' + voucherBean.getRemrks() + '"' + " , "
+								+ "\r\n";
+
+					}
+				}
+			}
+
+			// fileWriter.write(gpfHead + fileContent);
+			fileWriter.write(fileContent);
+			fileWriter.close();
+
+			File file = new File(path + fname);
+			String headerKey = "Content-Disposition";
+			String headerValue = String.format("attachment; filename=\"%s\"", fname);
+			response.setHeader(headerKey, headerValue);
+			FileInputStream inStream = new FileInputStream(file);
+			OutputStream out = response.getOutputStream();
+			byte[] buffer = new byte[4096];
+			int bytesRead = -1;
+			while ((bytesRead = inStream.read(buffer)) != -1) {
+				out.write(buffer, 0, bytesRead);
+			}
+
+			inStream.close();
+			out.close();
+
+			if (file.exists() && file.delete()) {
+				logger.info("FILE DELETED SUCCESSFULLY FROM LOCATION--->>> " + path);
+			}
+
+		} catch (Exception e) {
+
+			logger.error("########### EXCEPTION OCCURED ###########" + "\n" + e.getMessage());
+		}
+	}
+
+	////////////////////////////////////////////////////////DownloadXmlFile/////////////////////////////////////////////////////////////////////////////////////////
+	
+	
+	@RequestMapping(value = "Inner/downloadXmlFile", method = { RequestMethod.POST })
+	public void downloadXMLData(HttpServletResponse response, HttpServletRequest request,
+			@RequestParam(value = "pfmsFromMonth") String pfmsFromMonth) throws IOException {
+
+		System.err.println("===============XML=========================");
+		
+		session = request.getSession(true);
+		String msncode = (String) session.getAttribute("msncode");
+		Date currentDate = (Date) session.getAttribute("createdDate");
+		String userName = (String) session.getAttribute("username");
+		String ipadd = (String) session.getAttribute("createdIp");
+
+		logger.info("pfmsFromMonth :: " + pfmsFromMonth);
+
+		String pfmsFromDate = "01/".concat(pfmsFromMonth);
+		String pfmsToDate = CommonFunction.getLastDate(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7));
+		String finYear = new CommonFunction().generateFinancialYear(
+				CommonFunction.getLastDateByMnthYr(pfmsFromMonth.substring(0, 2), pfmsFromMonth.substring(3, 7)));
+
+		List<VoucherBean> voucherList = new ArrayList<>();
+		String path = request.getServletContext().getRealPath("/WEB-INF/downloadcca/");
+
+		try {
+			String gpfHead = null;
+
+			String fileContent = "\r\n";
+
+			voucherList = exportDataToExcelServiceImpl.getListDataOfVoucherTab(msncode, pfmsFromDate, pfmsToDate);
+
+			String fname = null;
+			Random random = new Random();
+			int random4Digit = CommonFunction.gen4DigitRandumNo();
+			String LastDate = CommonFunction.getlastDateOfMnth(Integer.parseInt(pfmsFromMonth.split("/")[1]),
+					Integer.parseInt(pfmsFromMonth.substring(0, 2)));
+			String[] split = LastDate.split("-");
+			String lastDay = split[2];
+
+			fname = "VOUCHER_" + msncode + "-" + pfmsFromMonth.split("/")[1] + "-" + pfmsFromMonth.substring(0, 2) + "-"
+					+ lastDay + "-" + random4Digit + ".xml";
+
+			FileWriter fileWriter = new FileWriter(path + fname);
+			
+			/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+			
+			if (CollectionUtils.isNotEmpty(voucherList)) {
+				
+				DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+				DocumentBuilder dBuilder;
+				dBuilder = dbFactory.newDocumentBuilder();
+				Document doc = dBuilder.newDocument();
+				Element rootElement = null;
+
+				// add elements to Document
+				
+					rootElement = doc.createElementNS("http://webservices.imas2.nic.in/PFMSExternalWebService.xsd",
+							"VoucherTable");
+					rootElement.setAttribute("MsnCode", msncode);
+					rootElement.setAttribute("FromDate", pfmsFromDate);
+					rootElement.setAttribute("ToDate", pfmsToDate);
+				
+				// append root element to document
+				doc.appendChild(rootElement);
+				Element voucherDetails = doc.createElement("VoucherDetails");
+				rootElement.appendChild(voucherDetails);
+				for (VoucherBean voucherBean : voucherList) {
+					
+					Element voucher = doc.createElement("Voucher");
+					
+					
+					voucher.setAttribute("MSNCODE", voucherBean.getMsncode());
+					voucher.setAttribute("VOUCHERNO", voucherBean.getVoucherNo());
+					voucher.setAttribute("VOUCHERDT", voucherBean.getVoucherDt().toString());
+					voucher.setAttribute("NATURE", voucherBean.getNature());
+					voucher.setAttribute("LOGIN", voucherBean.getLogin());
+					voucher.setAttribute("UPD", voucherBean.getUpd());
+					voucher.setAttribute("SANCTION", voucherBean.getSanction());
+					voucher.setAttribute("REMARKS", voucherBean.getRemrks());
+					
+					voucherDetails.appendChild(voucher);
+					
+					
+				}
+
+				TransformerFactory transformerFactory = TransformerFactory.newInstance();
+				Transformer transformer = transformerFactory.newTransformer();
+
+				// for pretty print
+				transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
+				transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no");
+				transformer.setOutputProperty(OutputKeys.METHOD, "xml");
+				transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+				
+				DOMSource source = new DOMSource(doc);
+				File file = new File(path + fname);
+				StreamResult sfile = new StreamResult(file);
+				transformer.transform(source, sfile);
+
+				response.setContentType("application/octet-stream");
+				String headerValue = String.format("attachment; filename=\"%s\"", fname);
+				response.setHeader("Content-Disposition", headerValue);
+
+				// obtains response's output stream
+				FileInputStream inStream = new FileInputStream(file);
+				OutputStream outStream = response.getOutputStream();
+
+				byte[] buffer = new byte[4096];
+				int bytesRead = -1;
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				while ((bytesRead = inStream.read(buffer)) != -1) {
+					outStream.write(buffer, 0, bytesRead);
+					baos.write(buffer, 0, bytesRead);
+				}
+
+				//baos.close();
+				inStream.close();
+				outStream.close();
+System.err.println(doc);
+				if (file.exists() && file.delete()) {
+					logger.info("FILE DELETED SUCCESSFULLY FROM LOCATION :: " + path);
+				}
+			}
+			
+			/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+		} catch (Exception e) {
+
+			logger.error("########### EXCEPTION OCCURED ###########" + "\n" + e.getMessage());
+		}
+
+	}
+
+}
